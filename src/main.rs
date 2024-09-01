@@ -1,17 +1,37 @@
-
-
-use std::net::SocketAddr;
-
-use axum::{extract::{Path, Query}, response::{Html, IntoResponse}, routing::get, Router};
-use serde::Deserialize;
-
-
 #[allow(unused)]
 
+// export error and result to use for other
+pub use self::error::{Error, Result};
+
+use std::net::SocketAddr;
+use axum::{extract::{Path, Query}, middleware, response::{Html, IntoResponse, Response}, routing::{get, get_service}, Router};
+use model::ModelController;
+use serde::Deserialize;
+use tower_cookies::CookieManagerLayer;
+use tower_http::services::ServeDir;
+
+mod error;
+mod model;
+mod web;
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
+    // Initialized ModelController
+    let mc = ModelController::new().await?;    
+
+    // routes apis
+    // route_layer used because we want to only apply this middleware for this routes
+    let routes_apis = web::routes_tickes::routes(mc.clone())
+    .route_layer(middleware::from_fn(web::mw_auth::mw_require_auth));
+    
     // routes
-    let routes = Router::new().merge(hello_routes());
+    let routes = Router::new()
+    .merge(hello_routes())
+    .merge(web::routes_login::routes())
+    .nest("/api", routes_apis)
+    .layer(middleware::map_response(main_response_mapper))
+    .layer(CookieManagerLayer::new())
+    .fallback_service(routes_static()); // fallback_service use for static file routing
 
     // region: --- Start server
     let addr = SocketAddr::from(([127,0,0,1], 8080));
@@ -19,12 +39,26 @@ async fn main() {
 
     axum::Server::bind(&addr)
         .serve(routes.into_make_service())
-        .await.unwrap()
+        .await.unwrap();
     // endregion: -- Start server
 
+
+    Ok(())
 }
 
+// region: -- middleware
+async fn main_response_mapper(res: Response) -> Response {
+    println!("->> {:<12} - main middleware response mapper", "RES_MAPPER");
+    println!();
+    res
+}
+// endregion: -- middleware
 
+// region: --static file routing
+fn routes_static() -> Router {
+    Router::new().nest_service("/", get_service(ServeDir::new("./")))
+}
+// endregion: -- static file routing
 
 
 // region: -- hello routers
